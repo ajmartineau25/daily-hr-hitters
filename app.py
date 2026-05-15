@@ -3,6 +3,7 @@ import pandas as pd
 import plotly.express as px
 from datetime import datetime
 import numpy as np
+import re
 
 st.set_page_config(
     page_title="🔥 Daily HR Hitters",
@@ -11,7 +12,6 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Styling
 st.markdown("""
 <style>
     .main-header {
@@ -25,24 +25,38 @@ st.markdown("""
     }
     .subheader { text-align: center; color: #555; font-size: 1.1rem; margin-bottom: 1.5rem; }
     .why-text { font-size: 0.9rem; color: #333; background: #fff7ed; padding: 8px 12px; border-radius: 8px; border-left: 4px solid #FF6B35; }
+    .hot-tag { background: #fee2e2; color: #991b1b; padding: 2px 8px; border-radius: 9999px; font-size: 0.75rem; font-weight: 600; }
 </style>
 """, unsafe_allow_html=True)
 
 st.markdown('<h1 class="main-header">🔥 Daily HR Hitters</h1>', unsafe_allow_html=True)
-st.markdown('<p class="subheader">May 15, 2026 • Blended • Explained • Value-Aware</p>', unsafe_allow_html=True)
+st.markdown('<p class="subheader">May 15, 2026 • Blended + Hot Streak Aware</p>', unsafe_allow_html=True)
 
 # Sidebar
 with st.sidebar:
-    st.header("📤 Upload Your Exports")
-    matchups_file = st.file_uploader("Matchups CSV", type="csv")
+    st.header("📤 Upload Your Data")
+    matchups_file = st.file_uploader("Matchups CSV (required)", type="csv")
     batters_file = st.file_uploader("Batters CSV", type="csv")
     park_file = st.file_uploader("ParkFactors CSV", type="csv")
     
     st.divider()
-    st.subheader("🎯 Smart Filters")
+    st.subheader("🔥 Hot Streak / Form Boost")
+    
+    hot_text = st.text_area(
+        "Paste hot player names (one per line or comma separated)",
+        placeholder="Hunter Goodman\nCorbin Carroll\nNolan Arenado",
+        height=100
+    )
+    
+    hot_csv = st.file_uploader("Upload FanGraphs / Savant Hot CSV (optional)", type="csv")
+    
+    hot_boost = st.slider("Hot Streak Boost Amount", 0.0, 3.0, 1.5, 0.5)
+    enable_hot = st.checkbox("Enable Hot Streak Boost", value=True)
+    
+    st.divider()
+    st.subheader("🎯 Other Filters")
     min_score = st.slider("Min HR Likelihood %", 0.0, 12.0, 2.0, 0.5)
     show_starters_only = st.checkbox("Starting Lineup Only", value=True)
-    min_value_score = st.slider("Min Value Score", 0.0, 10.0, 3.0, 0.5)
 
 if matchups_file:
     matchups = pd.read_csv(matchups_file)
@@ -54,7 +68,7 @@ if matchups_file:
     
     parkfactors = pd.read_csv(park_file) if park_file else None
     
-    # Smart Core Logic
+    # Core Scoring
     if show_starters_only and 'Starter' in matchups.columns:
         df = matchups[matchups['Starter'] == 1].copy()
     else:
@@ -74,6 +88,7 @@ if matchups_file:
         df['composite'] = df['base_hr']
         df['proj_pa'] = 3.5
 
+    # Park boost
     park_boost = 0.0
     if parkfactors is not None:
         try:
@@ -82,92 +97,126 @@ if matchups_file:
                 park_boost = max(0, (hr_pct - 1.0) * 0.9)
         except:
             pass
-    df['final_hr'] = (df['composite'] * (1 + park_boost)).round(2)
+    
+    df['final_hr'] = df['composite'] * (1 + park_boost)
+    
+    # Hot Streak Logic
+    hot_players = set()
+    
+    # From text input
+    if hot_text:
+        names = re.split(r'[,
+]', hot_text)
+        for name in names:
+            clean = name.strip()
+            if clean:
+                hot_players.add(clean.lower())
+    
+    # From FanGraphs / Savant CSV
+    if hot_csv:
+        try:
+            hot_df = pd.read_csv(hot_csv)
+            hot_df.columns = hot_df.columns.str.strip().str.lower()
+            
+            name_col = None
+            for col in ['name', 'player', 'player name', 'batter']:
+                if col in hot_df.columns:
+                    name_col = col
+                    break
+            
+            if name_col:
+                for name in hot_df[name_col].dropna().astype(str):
+                    hot_players.add(name.strip().lower())
+        except:
+            st.warning("Could not read the hot CSV. Make sure it has a 'Player' or 'Name' column.")
+    
+    # Apply hot streak boost
+    def apply_hot_boost(row):
+        if enable_hot and row['Batter'].lower() in hot_players:
+            return row['final_hr'] + hot_boost
+        return row['final_hr']
+    
+    df['final_hr'] = df.apply(apply_hot_boost, axis=1)
+    df['is_hot'] = df['Batter'].str.lower().isin(hot_players)
+    
+    # Value Score
     df['value_score'] = (df['final_hr'] * (df['proj_pa'] / 4.0)).round(2)
-
+    
+    # Why explanations
     def smart_why(row):
         reasons = []
+        if row.get('is_hot'):
+            reasons.append(f"hot streak (+{hot_boost})")
         if row.get('HR Boost', 0) and float(row.get('HR Boost', 0)) > 8:
             reasons.append("strong sim boost vs pitcher")
-        if row.get('vs Grade', 0) and float(row.get('vs Grade', 0)) >= 6:
-            reasons.append("good matchup grade")
         if park_boost > 0.04:
-            reasons.append("park advantage today")
-        if row.get('proj_hr_prob', 0) > row.get('base_hr', 0) + 1:
-            reasons.append("elevated overall projection")
+            reasons.append("park advantage")
         if row.get('proj_pa', 0) > 4.2:
-            reasons.append("high projected volume")
-        return " + ".join(reasons).capitalize() if reasons else "Clean sim probability in favorable spot"
-
+            reasons.append("high volume")
+        return " + ".join(reasons).capitalize() if reasons else "Solid projection"
+    
     df['Why'] = df.apply(smart_why, axis=1)
-    model_confidence = 67
-
-    filtered = df[(df['final_hr'] >= min_score) & (df['value_score'] >= min_value_score)].copy()
-    filtered = filtered.sort_values('final_hr', ascending=False)
-
-    tab1, tab2, tab3, tab4 = st.tabs(["🏆 Rankings", "💎 Value Plays", "📈 Insights", "🧠 How it Works"])
-
+    
+    # Filter
+    filtered = df[df['final_hr'] >= min_score].sort_values('final_hr', ascending=False)
+    
+    # Tabs
+    tab1, tab2, tab3 = st.tabs(["🏆 Rankings", "💎 Value Plays", "🔥 Hot Streak"])
+    
     with tab1:
-        c1, c2, c3, c4 = st.columns(4)
+        c1, c2, c3 = st.columns(3)
         c1.metric("Starters Analyzed", len(df))
-        c2.metric("Qualified Hitters", len(filtered))
-        c3.metric("Highest Likelihood", f"{filtered['final_hr'].max():.1f}%")
-        c4.metric("Model Confidence", f"{model_confidence}%")
-
-        st.subheader("🏆 Smartest HR Rankings Today")
+        c2.metric("Qualified", len(filtered))
+        c3.metric("Hot Players Boosted", len(hot_players))
+        
+        st.subheader("🏆 Rankings (with Hot Streak Boost)")
+        
         cols = ['Batter', 'Team', 'Pitcher', 'final_hr', 'value_score', 'Why']
         if 'Game' in filtered.columns:
             cols.insert(2, 'Game')
-        st.dataframe(filtered[cols].head(22), use_container_width=True, hide_index=True,
-                     column_config={
-                         "final_hr": st.column_config.ProgressColumn("HR Likelihood %", format="%.1f%%", min_value=0, max_value=12),
-                         "value_score": st.column_config.ProgressColumn("Value Score", format="%.2f", min_value=0, max_value=10),
-                     })
-
-        st.subheader("🔥 Top 5 Spotlight")
-        for i, (_, r) in enumerate(filtered.head(5).iterrows()):
+        
+        display_df = filtered[cols].head(25).copy()
+        display_df['final_hr'] = display_df['final_hr'].round(1)
+        
+        st.dataframe(
+            display_df,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "final_hr": st.column_config.ProgressColumn("HR Likelihood %", format="%.1f%%", min_value=0, max_value=15),
+            }
+        )
+        
+        st.subheader("🔥 Top Hot or High Likelihood Players")
+        for i, (_, r) in enumerate(filtered.head(6).iterrows()):
             with st.container(border=True):
-                cols = st.columns([0.6, 3.5, 2.2, 1.5])
-                cols[0].markdown(f"**#{i+1}**")
-                cols[1].markdown(f"**{r['Batter']}** ({r.get('Team','')}) vs {r.get('Pitcher','')}")
-                cols[2].markdown(f"<div class='why-text'>{r['Why']}</div>", unsafe_allow_html=True)
-                cols[3].metric("Likelihood", f"{r['final_hr']:.1f}%", delta=f"Value {r['value_score']:.1f}")
-
+                tag = "🔥 Hot" if r['is_hot'] else ""
+                st.markdown(f"**{r['Batter']}** {tag} ({r.get('Team','')}) — {r['final_hr']:.1f}%")
+                st.caption(r['Why'])
+    
     with tab2:
-        st.subheader("💎 Best Value Plays")
-        st.caption("High likelihood + strong volume = best edge opportunities")
+        st.subheader("💎 Value Plays")
         value_plays = filtered.sort_values('value_score', ascending=False).head(12)
         if len(value_plays) > 0:
-            st.dataframe(value_plays[['Batter','Team','final_hr','value_score','proj_pa','Why']].head(10), use_container_width=True, hide_index=True)
-            st.info("💡 Value Score = Likelihood × (Projected PA / 4). Higher = better combination of probability + opportunity.")
+            st.dataframe(value_plays[['Batter','Team','final_hr','value_score','Why']].head(10), use_container_width=True, hide_index=True)
         else:
-            st.warning("No strong value plays at current thresholds.")
-
+            st.info("No strong value plays at current thresholds.")
+    
     with tab3:
-        st.subheader("📈 Insights & Model Confidence")
-        colA, colB = st.columns(2)
-        with colA:
-            st.metric("Historical Accuracy (Top Picks)", f"{model_confidence}%")
-            st.markdown("When likelihood > 5%, top recommendations have performed well historically.")
-        with colB:
-            st.subheader("X / Twitter Buzz")
-            st.text_input("Buzz keywords", value="Coors, hot streak, home run")
-            if st.button("Check Buzz Signals"):
-                st.success("Production version can pull live X data.\n\nCurrent signals you should manually check:\n- Coors Field games getting extra chatter\n- Any last-minute pitcher changes")
-
-        fig = px.histogram(filtered, x='final_hr', nbins=15, title="Distribution of HR Likelihoods")
-        st.plotly_chart(fig, use_container_width=True)
-
-    with tab4:
-        st.subheader("🧠 How the Smart Model Works")
+        st.subheader("🔥 Hot Streak Management")
         st.markdown("""
-        **Composite Likelihood** = 60% Matchup HR Prob + 40% Overall Batter Projection + Park boost
-        
-        **Value Score** = Likelihood × (Projected PA / 4)
-        
-        **Why** explanations are auto-generated from the strongest signals.
+        **How it works:**
+        - Paste hot player names above, or
+        - Upload a CSV from FanGraphs / Baseball Savant (must have a "Player" or "Name" column)
+        - Players in the list get an automatic boost to their HR Likelihood
         """)
-
+        
+        if hot_players:
+            st.success(f"Currently boosting **{len(hot_players)}** hot players with +{hot_boost} likelihood")
+            st.write("Players being boosted:", ", ".join(list(hot_players)[:10]) + ("..." if len(hot_players) > 10 else ""))
+        else:
+            st.info("No hot players loaded yet. Paste names or upload a CSV above.")
+    
     st.download_button(
         "📥 Download Full Rankings (CSV)",
         filtered.to_csv(index=False).encode(),
@@ -176,19 +225,7 @@ if matchups_file:
     )
 
 else:
-    st.info("Upload your Matchups + Batters + ParkFactors CSVs to unlock the full smart model.")
-    st.markdown("**All requested features added:** Model confidence • X Buzz • Value Plays • Player context • Daily refresh ready")
+    st.info("Upload your Matchups CSV to get started. You can also add hot streak data from FanGraphs or by pasting names.")
 
 st.divider()
-st.caption("v3 • Fully blended • Value-aware • X-ready • Built for daily use with your Ballpark Pal data")
-
-with st.expander("🚀 Deploy as your daily tool"):
-    st.markdown("""
-    **Recommended daily workflow:**
-    
-    1. Put this `app.py` in a GitHub repo
-    2. Deploy free on Streamlit Cloud
-    3. Every morning just re-upload your fresh CSVs
-    
-    This becomes your private daily HR edge tool.
-    """)
+st.caption("v4 • Hot Streak Support + FanGraphs CSV Ready • Built for daily use")
