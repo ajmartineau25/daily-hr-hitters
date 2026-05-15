@@ -29,19 +29,21 @@ if matchups_file:
     hr_col = [c for c in df.columns if 'HR Prob' in c][0]
     df['likelihood'] = pd.to_numeric(df[hr_col], errors='coerce').fillna(0)
     
-    # Load hot hitters with encoding fix
+    # Load hot hitters safely
     hot_set = set()
     if hot_file:
         try:
             hf = pd.read_csv(hot_file, encoding='utf-8-sig')
-        except:
-            hf = pd.read_csv(hot_file, encoding='latin1')
-        
-        hf.columns = hf.columns.str.strip()
-        for _, row in hf.iterrows():
-            name = str(row.get('Name', '')).lower().strip()
-            if name:
-                hot_set.add(name)
+            if hf.empty:
+                st.warning("hot_hitters.csv appears to be empty.")
+            else:
+                hf.columns = hf.columns.str.strip()
+                for _, row in hf.iterrows():
+                    name = str(row.get('Name', '')).lower().strip()
+                    if name:
+                        hot_set.add(name)
+        except Exception as e:
+            st.warning(f"Could not read hot_hitters.csv properly: {str(e)[:100]}")
     
     def calculate_score(row):
         base = row['likelihood']
@@ -63,7 +65,6 @@ if matchups_file:
         return " | ".join(reasons) if reasons else "Good matchup"
     df['why'] = df.apply(get_why, axis=1)
     
-    # Tabs
     tab1, tab2, tab3, tab4 = st.tabs(["Most Likely", "Hot Batters", "Best Value", "Top Picks"])
     
     with tab1:
@@ -79,7 +80,7 @@ if matchups_file:
         if len(hot_df) > 0:
             st.dataframe(hot_df[['Batter', 'Team', 'Pitcher', 'score']].head(15), use_container_width=True, hide_index=True)
         else:
-            st.info("No players from your hot list have good matchups today.")
+            st.info("No overlap between your hot list and today's matchups.")
     
     with tab3:
         st.subheader("Best Value Plays")
