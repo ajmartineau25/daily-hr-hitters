@@ -7,12 +7,12 @@ import numpy as np
 st.set_page_config(page_title="Daily HR Hitters", page_icon="⚾", layout="wide")
 
 st.markdown("<h1 style='color:#FF6B35; font-size:2.6rem; font-weight:800;'>Daily HR Hitters</h1>", unsafe_allow_html=True)
-st.markdown("<p style='color:#666; font-size:1.1rem;'>May 15, 2026 • Blended Ballpark Pal + Hot Form</p>", unsafe_allow_html=True)
+st.markdown("<p style='color:#666; font-size:1.1rem;'>May 15, 2026 • Blended + Hot Form</p>", unsafe_allow_html=True)
 
 with st.sidebar:
     st.header("Upload Data")
     matchups_file = st.file_uploader("Matchups CSV (required)", type="csv")
-    hot_file = st.file_uploader("hot_hitters.csv (from Drive)", type="csv")
+    hot_file = st.file_uploader("hot_hitters.csv", type="csv")
     
     st.divider()
     st.subheader("Hot Streak Settings")
@@ -26,27 +26,23 @@ if matchups_file:
     if 'Starter' in df.columns:
         df = df[df['Starter'] == 1]
     
-    # Get likelihood
     hr_col = [c for c in df.columns if 'HR Prob' in c][0]
     df['likelihood'] = pd.to_numeric(df[hr_col], errors='coerce').fillna(0)
     
-    # Load hot hitters
+    # Load hot hitters with encoding fix
     hot_set = set()
-    hot_stats = {}
     if hot_file:
-        hf = pd.read_csv(hot_file)
+        try:
+            hf = pd.read_csv(hot_file, encoding='utf-8-sig')
+        except:
+            hf = pd.read_csv(hot_file, encoding='latin1')
+        
         hf.columns = hf.columns.str.strip()
         for _, row in hf.iterrows():
             name = str(row.get('Name', '')).lower().strip()
             if name:
                 hot_set.add(name)
-                hot_stats[name] = {
-                    'recent_hr': row.get('HR', 0),
-                    'xwOBA': row.get('xwOBA', 0),
-                    'Hard%': row.get('Hard%', 0)
-                }
     
-    # Apply hot boost
     def calculate_score(row):
         base = row['likelihood']
         name = str(row.get('Batter', '')).lower().strip()
@@ -57,22 +53,15 @@ if matchups_file:
     df['score'] = df.apply(calculate_score, axis=1)
     df['is_hot'] = df['Batter'].str.lower().str.strip().isin(hot_set)
     
-    # Value score
-    df['value_score'] = df['score'] * (df.get('proj_pa', 3.8) / 4)
-    
-    # Why
-    def get_why(row):
-        reasons = []
-        name = str(row.get('Batter', '')).lower().strip()
-        if row['is_hot']:
-            reasons.append(f"Hot form (+{hot_boost})")
-        if row.get('HR Boost', 0) and float(row.get('HR Boost', 0)) > 10:
-            reasons.append("Strong vs pitcher")
-        return " | ".join(reasons) if reasons else "Good matchup"
-    df['why'] = df.apply(get_why, axis=1)
-    
     df = df.sort_values('score', ascending=False).reset_index(drop=True)
     df['rank'] = df.index + 1
+    
+    def get_why(row):
+        reasons = []
+        if row['is_hot']:
+            reasons.append(f"Hot form (+{hot_boost})")
+        return " | ".join(reasons) if reasons else "Good matchup"
+    df['why'] = df.apply(get_why, axis=1)
     
     # Tabs
     tab1, tab2, tab3, tab4 = st.tabs(["Most Likely", "Hot Batters", "Best Value", "Top Picks"])
@@ -85,26 +74,25 @@ if matchups_file:
                      column_config={"Likelihood %": st.column_config.ProgressColumn(format="%.1f%%", min_value=0, max_value=12)})
     
     with tab2:
-        st.subheader("Hot Batters (from your hot_hitters.csv)")
+        st.subheader("Hot Batters (from hot_hitters.csv)")
         hot_df = df[df['is_hot']].sort_values('score', ascending=False)
         if len(hot_df) > 0:
             st.dataframe(hot_df[['Batter', 'Team', 'Pitcher', 'score']].head(15), use_container_width=True, hide_index=True)
-            st.caption("These players are both hot recently and have favorable matchups today.")
         else:
-            st.info("No overlap found between your hot list and today's matchups.")
+            st.info("No players from your hot list have good matchups today.")
     
     with tab3:
         st.subheader("Best Value Plays")
-        value_df = df.sort_values('value_score', ascending=False)
-        st.dataframe(value_df[['Batter', 'Team', 'Pitcher', 'score', 'value_score']].head(12), use_container_width=True, hide_index=True)
+        df['value'] = df['score'] * (df.get('proj_pa', 3.8) / 4)
+        value_df = df.sort_values('value', ascending=False)
+        st.dataframe(value_df[['Batter', 'Team', 'Pitcher', 'score', 'value']].head(12), use_container_width=True, hide_index=True)
     
     with tab4:
         st.subheader("Today's Top Recommendations")
         for i, row in df.head(6).iterrows():
             hot_tag = " 🔥 Hot" if row['is_hot'] else ""
             st.markdown(f"**#{row['rank']} {row['Batter']}**{hot_tag} ({row['Team']}) vs {row['Pitcher']}")
-            st.caption(f"**{row['score']:.1f}% likelihood** — {row['why']}")
-            st.divider()
+            st.caption(f"**{row['score']:.1f}%** — {row['why']}")
 
 else:
-    st.info("Upload your Matchups CSV and hot_hitters.csv to get started.")
+    st.info("Upload Matchups CSV + hot_hitters.csv to begin.")
