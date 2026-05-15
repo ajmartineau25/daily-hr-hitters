@@ -6,7 +6,7 @@ import numpy as np
 import re
 
 st.set_page_config(
-    page_title="🔥 Daily HR Hitters",
+    page_title="Daily HR Hitters",
     page_icon="⚾",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -25,22 +25,20 @@ st.markdown("""
     }
     .subheader { text-align: center; color: #555; font-size: 1.1rem; margin-bottom: 1.5rem; }
     .why-text { font-size: 0.9rem; color: #333; background: #fff7ed; padding: 8px 12px; border-radius: 8px; border-left: 4px solid #FF6B35; }
-    .hot-tag { background: #fee2e2; color: #991b1b; padding: 2px 8px; border-radius: 9999px; font-size: 0.75rem; font-weight: 600; }
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown('<h1 class="main-header">🔥 Daily HR Hitters</h1>', unsafe_allow_html=True)
+st.markdown('<h1 class="main-header">Daily HR Hitters</h1>', unsafe_allow_html=True)
 st.markdown('<p class="subheader">May 15, 2026 • Blended + Hot Streak Aware</p>', unsafe_allow_html=True)
 
-# Sidebar
 with st.sidebar:
-    st.header("📤 Upload Your Data")
+    st.header("Upload Your Data")
     matchups_file = st.file_uploader("Matchups CSV (required)", type="csv")
     batters_file = st.file_uploader("Batters CSV", type="csv")
     park_file = st.file_uploader("ParkFactors CSV", type="csv")
     
     st.divider()
-    st.subheader("🔥 Hot Streak / Form Boost")
+    st.subheader("Hot Streak / Form Boost")
     
     hot_text = st.text_area(
         "Paste hot player names (one per line or comma separated)",
@@ -54,7 +52,7 @@ with st.sidebar:
     enable_hot = st.checkbox("Enable Hot Streak Boost", value=True)
     
     st.divider()
-    st.subheader("🎯 Other Filters")
+    st.subheader("Other Filters")
     min_score = st.slider("Min HR Likelihood %", 0.0, 12.0, 2.0, 0.5)
     show_starters_only = st.checkbox("Starting Lineup Only", value=True)
 
@@ -68,7 +66,6 @@ if matchups_file:
     
     parkfactors = pd.read_csv(park_file) if park_file else None
     
-    # Core Scoring
     if show_starters_only and 'Starter' in matchups.columns:
         df = matchups[matchups['Starter'] == 1].copy()
     else:
@@ -88,7 +85,6 @@ if matchups_file:
         df['composite'] = df['base_hr']
         df['proj_pa'] = 3.5
 
-    # Park boost
     park_boost = 0.0
     if parkfactors is not None:
         try:
@@ -103,7 +99,6 @@ if matchups_file:
     # Hot Streak Logic
     hot_players = set()
     
-    # From text input
     if hot_text:
         names = re.split(r'[,
 ]', hot_text)
@@ -112,25 +107,21 @@ if matchups_file:
             if clean:
                 hot_players.add(clean.lower())
     
-    # From FanGraphs / Savant CSV
     if hot_csv:
         try:
             hot_df = pd.read_csv(hot_csv)
             hot_df.columns = hot_df.columns.str.strip().str.lower()
-            
             name_col = None
             for col in ['name', 'player', 'player name', 'batter']:
                 if col in hot_df.columns:
                     name_col = col
                     break
-            
             if name_col:
                 for name in hot_df[name_col].dropna().astype(str):
                     hot_players.add(name.strip().lower())
         except:
-            st.warning("Could not read the hot CSV. Make sure it has a 'Player' or 'Name' column.")
+            st.warning("Could not read the hot CSV")
     
-    # Apply hot streak boost
     def apply_hot_boost(row):
         if enable_hot and row['Batter'].lower() in hot_players:
             return row['final_hr'] + hot_boost
@@ -139,15 +130,13 @@ if matchups_file:
     df['final_hr'] = df.apply(apply_hot_boost, axis=1)
     df['is_hot'] = df['Batter'].str.lower().isin(hot_players)
     
-    # Value Score
     df['value_score'] = (df['final_hr'] * (df['proj_pa'] / 4.0)).round(2)
     
-    # Why explanations
     def smart_why(row):
         reasons = []
         if row.get('is_hot'):
             reasons.append(f"hot streak (+{hot_boost})")
-        if row.get('HR Boost', 0) and float(row.get('HR Boost', 0)) > 8:
+        if float(row.get('HR Boost', 0)) > 8:
             reasons.append("strong sim boost vs pitcher")
         if park_boost > 0.04:
             reasons.append("park advantage")
@@ -157,11 +146,9 @@ if matchups_file:
     
     df['Why'] = df.apply(smart_why, axis=1)
     
-    # Filter
     filtered = df[df['final_hr'] >= min_score].sort_values('final_hr', ascending=False)
     
-    # Tabs
-    tab1, tab2, tab3 = st.tabs(["🏆 Rankings", "💎 Value Plays", "🔥 Hot Streak"])
+    tab1, tab2, tab3 = st.tabs(["Rankings", "Value Plays", "Hot Streak"])
     
     with tab1:
         c1, c2, c3 = st.columns(3)
@@ -169,33 +156,26 @@ if matchups_file:
         c2.metric("Qualified", len(filtered))
         c3.metric("Hot Players Boosted", len(hot_players))
         
-        st.subheader("🏆 Rankings (with Hot Streak Boost)")
+        st.subheader("Rankings (Hot Streak Boosted)")
         
         cols = ['Batter', 'Team', 'Pitcher', 'final_hr', 'value_score', 'Why']
         if 'Game' in filtered.columns:
             cols.insert(2, 'Game')
         
-        display_df = filtered[cols].head(25).copy()
-        display_df['final_hr'] = display_df['final_hr'].round(1)
+        st.dataframe(filtered[cols].head(25), use_container_width=True, hide_index=True,
+                     column_config={
+                         "final_hr": st.column_config.ProgressColumn("HR Likelihood %", format="%.1f%%", min_value=0, max_value=15)
+                     })
         
-        st.dataframe(
-            display_df,
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "final_hr": st.column_config.ProgressColumn("HR Likelihood %", format="%.1f%%", min_value=0, max_value=15),
-            }
-        )
-        
-        st.subheader("🔥 Top Hot or High Likelihood Players")
+        st.subheader("Top Players")
         for i, (_, r) in enumerate(filtered.head(6).iterrows()):
             with st.container(border=True):
-                tag = "🔥 Hot" if r['is_hot'] else ""
-                st.markdown(f"**{r['Batter']}** {tag} ({r.get('Team','')}) — {r['final_hr']:.1f}%")
+                tag = "Hot" if r['is_hot'] else ""
+                st.markdown(f"**{r['Batter']}** {tag} — {r['final_hr']:.1f}%")
                 st.caption(r['Why'])
     
     with tab2:
-        st.subheader("💎 Value Plays")
+        st.subheader("Value Plays")
         value_plays = filtered.sort_values('value_score', ascending=False).head(12)
         if len(value_plays) > 0:
             st.dataframe(value_plays[['Batter','Team','final_hr','value_score','Why']].head(10), use_container_width=True, hide_index=True)
@@ -203,29 +183,17 @@ if matchups_file:
             st.info("No strong value plays at current thresholds.")
     
     with tab3:
-        st.subheader("🔥 Hot Streak Management")
-        st.markdown("""
-        **How it works:**
-        - Paste hot player names above, or
-        - Upload a CSV from FanGraphs / Baseball Savant (must have a "Player" or "Name" column)
-        - Players in the list get an automatic boost to their HR Likelihood
-        """)
-        
+        st.subheader("Hot Streak Management")
         if hot_players:
-            st.success(f"Currently boosting **{len(hot_players)}** hot players with +{hot_boost} likelihood")
-            st.write("Players being boosted:", ", ".join(list(hot_players)[:10]) + ("..." if len(hot_players) > 10 else ""))
+            st.success(f"Boosting {len(hot_players)} hot players (+{hot_boost})")
         else:
-            st.info("No hot players loaded yet. Paste names or upload a CSV above.")
+            st.info("No hot players loaded. Paste names or upload CSV above.")
     
-    st.download_button(
-        "📥 Download Full Rankings (CSV)",
-        filtered.to_csv(index=False).encode(),
-        file_name=f"Smart_HR_Hitters_{datetime.now().strftime('%Y-%m-%d')}.csv",
-        use_container_width=True
-    )
+    st.download_button("Download Rankings (CSV)", filtered.to_csv(index=False).encode(),
+                       file_name=f"HR_Hitters_{datetime.now().strftime('%Y-%m-%d')}.csv")
 
 else:
-    st.info("Upload your Matchups CSV to get started. You can also add hot streak data from FanGraphs or by pasting names.")
+    st.info("Upload Matchups CSV to start.")
 
 st.divider()
-st.caption("v4 • Hot Streak Support + FanGraphs CSV Ready • Built for daily use")
+st.caption("v4 • Hot Streak + FanGraphs CSV Support")
