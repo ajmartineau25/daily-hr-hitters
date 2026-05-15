@@ -29,21 +29,25 @@ if matchups_file:
     hr_col = [c for c in df.columns if 'HR Prob' in c][0]
     df['likelihood'] = pd.to_numeric(df[hr_col], errors='coerce').fillna(0)
     
-    # Load hot hitters safely
+    # Robust hot hitters loading
     hot_set = set()
     if hot_file:
-        try:
-            hf = pd.read_csv(hot_file, encoding='utf-8-sig')
-            if hf.empty:
-                st.warning("hot_hitters.csv appears to be empty.")
-            else:
-                hf.columns = hf.columns.str.strip()
-                for _, row in hf.iterrows():
-                    name = str(row.get('Name', '')).lower().strip()
-                    if name:
-                        hot_set.add(name)
-        except Exception as e:
-            st.warning(f"Could not read hot_hitters.csv properly: {str(e)[:100]}")
+        hf = None
+        for enc in ['utf-8-sig', 'latin1', 'cp1252']:
+            try:
+                hf = pd.read_csv(hot_file, encoding=enc)
+                break
+            except:
+                continue
+        
+        if hf is not None and not hf.empty:
+            hf.columns = hf.columns.str.strip()
+            for _, row in hf.iterrows():
+                name = str(row.get('Name', '')).lower().strip()
+                if name:
+                    hot_set.add(name)
+        else:
+            st.warning("Could not read hot_hitters.csv. Try re-exporting it as CSV from Google Sheets.")
     
     def calculate_score(row):
         base = row['likelihood']
