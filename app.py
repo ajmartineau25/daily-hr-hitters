@@ -3,11 +3,21 @@ import pandas as pd
 import plotly.express as px
 from datetime import datetime
 import numpy as np
+import unicodedata
+
+def normalize_name(name):
+    if pd.isna(name):
+        return ""
+    name = str(name).lower().strip()
+    # Remove accents/diacritics
+    name = unicodedata.normalize('NFKD', name)
+    name = ''.join([c for c in name if not unicodedata.combining(c)])
+    return name
 
 st.set_page_config(page_title="Daily HR Hitters", page_icon="⚾", layout="wide")
 
 st.markdown("<h1 style='color:#FF6B35; font-size:2.6rem; font-weight:800;'>Daily HR Hitters</h1>", unsafe_allow_html=True)
-st.markdown("<p style='color:#666; font-size:1.1rem;'>May 15, 2026 • Ballpark Pal + Smart Hot Form (Hard% + SLG weighted)</p>", unsafe_allow_html=True)
+st.markdown("<p style='color:#666; font-size:1.1rem;'>May 15, 2026 • Ballpark Pal + Smart Hot Form</p>", unsafe_allow_html=True)
 
 with st.sidebar:
     st.header("Upload Data")
@@ -29,7 +39,7 @@ if matchups_file:
     hr_col = [c for c in df.columns if 'HR Prob' in c][0]
     df['likelihood'] = pd.to_numeric(df[hr_col], errors='coerce').fillna(0)
     
-    # Load hot_hitters.csv with SLG and Hard%
+    # Load hot_hitters.csv
     hot_data = {}
     if hot_file:
         hf = None
@@ -42,7 +52,7 @@ if matchups_file:
         if hf is not None and not hf.empty:
             hf.columns = hf.columns.str.strip()
             for _, row in hf.iterrows():
-                name = str(row.get('Name', '')).lower().strip()
+                name = normalize_name(row.get('Name', ''))
                 if name:
                     hard_str = str(row.get('Hard%', '0')).replace('%', '')
                     slg_str = str(row.get('SLG', '0')).replace('%', '')
@@ -55,36 +65,34 @@ if matchups_file:
     
     def calculate_score(row):
         base = row['likelihood']
-        name = str(row.get('Batter', '')).lower().strip()
+        name = normalize_name(row.get('Batter', ''))
         
         if apply_hot and name in hot_data:
             h = hot_data[name]
-            # Proportional boost based on Hard Hit % and SLG
             form_boost = (
                 h['recent_hr'] * 0.10 +
                 h['xwOBA'] * 1.8 +
-                h['HardPct'] * 0.05 +      # Higher weight on Hard Hit %
-                h['SLG'] * 4               # Strong weight on SLG
+                h['HardPct'] * 0.05 +
+                h['SLG'] * 4
             )
             return base + base_boost + form_boost
         return base
     
     df['score'] = df.apply(calculate_score, axis=1)
-    df['is_hot'] = df['Batter'].str.lower().str.strip().isin(hot_data.keys())
+    df['is_hot'] = df.apply(lambda row: normalize_name(row.get('Batter', '')) in hot_data, axis=1)
     
     df = df.sort_values('score', ascending=False).reset_index(drop=True)
     df['rank'] = df.index + 1
     
     def get_why(row):
         reasons = []
-        name = str(row.get('Batter', '')).lower().strip()
+        name = normalize_name(row.get('Batter', ''))
         if row['is_hot']:
             h = hot_data.get(name, {})
             reasons.append(f"Hot (Hard%:{h.get('HardPct',0):.1f}, SLG:{h.get('SLG',0):.3f})")
         return " | ".join(reasons) if reasons else "Good matchup"
     df['why'] = df.apply(get_why, axis=1)
     
-    # Tabs
     tab1, tab2, tab3, tab4 = st.tabs(["Most Likely", "Hot Batters", "Best Value", "Top Picks"])
     
     with tab1:
@@ -98,10 +106,9 @@ if matchups_file:
         st.subheader("Hot Batters (Weighted by Hard% + SLG)")
         hot_df = df[df['is_hot']].copy()
         if len(hot_df) > 0:
-            hot_df['Recent HRs'] = hot_df['Batter'].str.lower().map(lambda x: hot_data.get(x, {}).get('recent_hr', ''))
-            hot_df['xwOBA'] = hot_df['Batter'].str.lower().map(lambda x: hot_data.get(x, {}).get('xwOBA', ''))
-            hot_df['Hard%'] = hot_df['Batter'].str.lower().map(lambda x: hot_data.get(x, {}).get('HardPct', ''))
-            hot_df['SLG'] = hot_df['Batter'].str.lower().map(lambda x: hot_data.get(x, {}).get('SLG', ''))
+            hot_df['Recent HRs'] = hot_df['Batter'].apply(lambda x: hot_data.get(normalize_name(x), {}).get('recent_hr', ''))
+            hot_df['Hard%'] = hot_df['Batter'].apply(lambda x: hot_data.get(normalize_name(x), {}).get('HardPct', ''))
+            hot_df['SLG'] = hot_df['Batter'].apply(lambda x: hot_data.get(normalize_name(x), {}).get('SLG', ''))
             st.dataframe(hot_df[['Batter','Team','Pitcher','score','Recent HRs','Hard%','SLG']].head(15), use_container_width=True, hide_index=True)
         else:
             st.info("No hot players from your list have good matchups today.")
